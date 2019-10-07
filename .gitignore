@@ -18,3 +18,7 @@
 encoder/saved_models/*
 synthesizer/saved_models/*
 vocoder/saved_models/*
+/bin/
+/include/
+/lib/
+/share/

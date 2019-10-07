@@ -1,52 +1,120 @@
+from collections import Counter, defaultdict
+from datetime import timedelta
 from encoder import inference as encoder
 from encoder.params_model import model_embedding_size as speaker_embedding_size
 from pathlib import Path
-from sklearn.cluster import KMeans
+from sklearn.cluster import AffinityPropagation, DBSCAN, KMeans, MeanShift, SpectralClustering, estimate_bandwidth
 from synthesizer.inference import Synthesizer
 from time import sleep
-from toolbox.utterance import Utterance
+from timeit import default_timer as timer
 from typing import List
 from utils.argutils import print_args
 from vocoder import inference as vocoder
 
 import argparse
+import itertools
 import json
 import librosa
+import math
 import matplotlib
 matplotlib.rcParams['backend'] = 'Qt5Agg'
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+import random
 import sys
 import torch
 import umap
 
+CLUSTER_AND_PLOT_ITERATIONS = 2000
 
 colormap = np.array([
-    [0, 127, 70],
-    [255, 0, 0],
-    [255, 217, 38],
-    [0, 135, 255],
-    [165, 0, 165],
-    [255, 167, 255],
-    [97, 142, 151],
-    [0, 255, 255],
-    [255, 96, 38],
-    [142, 76, 0],
-    [33, 0, 127],
-    [0, 0, 0],
-    [183, 183, 183],
-    [76, 255, 0],
+    [255,0,0], 
+    [255,145,128], 
+    [153,41,0], 
+    [89,57,45], 
+    [179,146,134], 
+    [255,102,0], 
+    [255,179,128], 
+    [178,95,0], 
+    [64,34,0], 
+    [140,108,70], 
+    [255,170,0], 
+    [255,234,191], 
+    [64,58,48], 
+    [89,71,0], 
+    [178,152,45], 
+    [255,238,0], 
+    [140,138,105], 
+    [242,255,191], 
+    [170,255,0], 
+    [156,204,102], 
+    [88,115,57], 
+    [0,255,102], 
+    [0,166,88], 
+    [0,77,51], 
+    [172,230,210], 
+    [0,255,204], 
+    [0,140,131], 
+    [0,238,255], 
+    [0,163,204], 
+    [0,82,102], 
+    [0,170,255], 
+    [191,234,255], 
+    [0,95,179], 
+    [0,41,77], 
+    [0,102,255], 
+    [105,119,140], 
+    [0,20,77], 
+    [191,208,255], 
+    [0,34,255], 
+    [0,20,153], 
+    [89,70,140], 
+    [179,128,255], 
+    [217,191,255], 
+    [204,0,255], 
+    [122,0,153], 
+    [61,0,77], 
+    [255,0,204], 
+    [191,96,159], 
+    [115,86,105], 
+    [255,0,136], 
+    [140,0,75], 
+    [64,0,34], 
+    [255,191,225], 
+    [255,0,68], 
+    [115,0,15], 
+    [191,96,108], 
+    [76,38,43],
 ], dtype=np.float) / 255 
 
 min_umap_points = 4
 umap_hot = False
 fig = plt.figure(figsize=(4, 4), facecolor="#F0F0F0")
 umap_ax = fig.subplots()
-utterances = list()
+embeddings = list()
 file_name_to_embedding = dict()
 
-def draw_umap_projections(utterances: List[Utterance], clusters):
+def sample_points(embeddings, clusters, percentage_per_cluster):
+    cluster_to_embeddings = defaultdict(list)
+    for cluster, embedding in zip(clusters, embeddings):
+        cluster_to_embeddings[cluster].append(embedding)
+    for cluster in cluster_to_embeddings.keys():
+        embeddings_to_sample = cluster_to_embeddings[cluster]
+        target_size = math.ceil(percentage_per_cluster * len(embeddings_to_sample))
+        random.seed()
+        while len(embeddings_to_sample) > target_size:
+            index_to_delete = random.randint(0, len(embeddings_to_sample) - 1)
+            embeddings_to_sample.pop(index_to_delete)
+    sampled_embeddings = list()
+    sampled_clusters = list()
+    for sampled_cluster, sampled_embedding in itertools.chain.from_iterable(map(lambda x: list(map(lambda y: (x[0], y), x[1])), cluster_to_embeddings.items())):
+        sampled_embeddings.append(sampled_embedding)
+        sampled_clusters.append(sampled_cluster)
+    return sampled_embeddings, sampled_clusters
+
+
+def draw_umap_projections(embeddings, clusters, sampling_percentage=None):
     global umap_hot
     global umap_ax
     global fig
@@ -54,19 +122,19 @@ def draw_umap_projections(utterances: List[Utterance], clusters):
 
     umap_ax.clear()
 
-    speakers = np.unique([u.speaker_name for u in utterances])
-    if clusters is not None:
-        colors = {utterance.speaker_name: colormap[cluster] for i, utterance, cluster in zip(range(len(utterances)), utterances, clusters)}
-    else:
-        # colors = {speaker_name: colormap[i] for i, speaker_name in enumerate(speakers)}
-        clusters = [0 for i, speaker_name in enumerate(speakers)]
-    embeds = [u.embed for u in utterances]
+    assert len(embeddings) == len(clusters)
 
-    print("Utterances len: %d" % len(utterances))
+    print("draw_umap_projections called with %d points" % len(embeddings))
+    if sampling_percentage is not None:
+        print("Sampling %f points....." % sampling_percentage)
+        embeddings, clusters = sample_points(embeddings, clusters, sampling_percentage)
+        print("Sampled down to %d points!" % len(embeddings))
+
+    print("Utterances len: %d" % len(embeddings))
     # Display a message if there aren't enough points
-    if len(utterances) < min_umap_points:
+    if len(embeddings) < min_umap_points:
         umap_ax.text(.5, .5, "Add %d more points to\ngenerate the projections" % 
-                          (min_umap_points - len(utterances)), 
+                          (min_umap_points - len(embeddings)), 
                           horizontalalignment='center', fontsize=15)
         umap_ax.set_title("")
         
@@ -77,21 +145,21 @@ def draw_umap_projections(utterances: List[Utterance], clusters):
                 "Drawing UMAP projections for the first time, this will take a few seconds.")
             umap_hot = True
         
-        reducer = umap.UMAP(int(np.ceil(np.sqrt(len(embeds)))), metric="cosine")
-
-        print("embeds len: %d" % len(embeds))
+        print("Computing projections.....")
+        reducer = umap.UMAP(int(np.ceil(np.sqrt(len(embeddings)))), metric="cosine")
+        print("embeddings len: %d" % len(embeddings))
         # reducer = TSNE()
-        projections = reducer.fit_transform(embeds)
+        projections = reducer.fit_transform(embeddings)
+        print("Computed projections!")
         
-        speakers_done = set()
-        for projection, utterance, cluster in zip(projections, utterances, clusters):
-            # color = colors[utterance.speaker_name]
+        print("Plotting projections.....")
+        projection_count = 0
+        for projection, embedding, cluster in zip(projections, embeddings, clusters):
             color = colormap[cluster]
-            mark = "x" if "_gen_" in utterance.name else "o"
-            label = None if utterance.speaker_name in speakers_done else utterance.speaker_name
-            speakers_done.add(utterance.speaker_name)
+            mark = "x"
             umap_ax.scatter(
-                projection[0], projection[1], c=[color], marker=mark, label=label)
+                projection[0], projection[1], c=[color], marker=mark, label=cluster)
+            projection_count += 1
         # umap_ax.set_title("UMAP projections")
         umap_ax.legend(prop={'size': 10})
 
@@ -99,14 +167,27 @@ def draw_umap_projections(utterances: List[Utterance], clusters):
     umap_ax.set_aspect("equal", "datalim")
     umap_ax.set_xticks([])
     umap_ax.set_yticks([])
-    # umap_ax.figure.canvas.draw()
+    print("Plotted projections!")
+    print("Remember, there are %d clusters!" % len(set(clusters)))
 
-    if len(utterances) >= min_umap_points:
+    if len(embeddings) >= min_umap_points:
         print("Showing UMAP chart")
         plt.show()
         umap_plot_path = "umap_test.png"
         print("Saving UMAP chart at: " + umap_plot_path)
         plt.savefig(umap_plot_path)
+
+
+def get_clustering_algorithm(clustering_algorithm, x):
+    clustering_algorithms = {
+        "k_means": KMeans(n_clusters=4, random_state=9938),
+        "spectral_clustering": SpectralClustering(n_clusters=4),
+        "mean_shift": MeanShift(bandwidth=estimate_bandwidth(x, quantile=0.2, n_samples=int(0.1 * len(x)))),
+        "affinity_propagation": AffinityPropagation(damping=0.95, preference=50),
+        "dbscan": DBSCAN(eps=0.5, metric="l1", min_samples=5),
+    }
+    print("Using clustering algorithm: %s" % clustering_algorithm)
+    return clustering_algorithms[clustering_algorithm]
 
 
 if __name__ == '__main__':
@@ -121,21 +202,21 @@ if __name__ == '__main__':
     parser.add_argument("-e", "--enc_model_fpath", type=Path, 
                         default="encoder/saved_models/pretrained.pt",
                         help="Path to a saved encoder")
-    parser.add_argument("-s", "--syn_model_dir", type=Path, 
-                        default="synthesizer/saved_models/logs-pretrained/",
-                        help="Directory containing the synthesizer model")
-    parser.add_argument("-v", "--voc_model_fpath", type=Path, 
-                        default="vocoder/saved_models/pretrained/pretrained.pt",
-                        help="Path to a saved vocoder")
-    parser.add_argument("--low_mem", action="store_true", help=\
-        "If True, the memory used by the synthesizer will be freed after each use. Adds large "
-        "overhead but allows to save some GPU memory for lower-end GPUs.")
-    parser.add_argument("--no_sound", action="store_true", help=\
-        "If True, audio won't be played.")
+    parser.add_argument("--file_name_to_embedding_file_path", type=Path, default=None, help=\
+        "Path to a file name to audio embedding dictionary saved in JSON.")
+    parser.add_argument("--file_name_to_cluster_file_path", type=Path, default=None, help=\
+        "Path to a file name to cluster dictionary saved in JSON.")
+    parser.add_argument("-c", "--create_projection", action="store_true", help=\
+        "If true create a umap or tsne projection.")
+    parser.add_argument("--output_embeddings_file_path", type=Path, default="audio-file-embeddings--file-name-to-embedding.json", help=\
+        "Output path indicating where the mapping from file names to embeddings should be stored.")
+    parser.add_argument("--output_clusters_file_path", type=Path, default="audio-file-embeddings--file-name-to-cluster.json", help=\
+        "Output path indicating where the mapping from file names to cluster number should be stored.")
+    parser.add_argument("--sample_from_clusters", default=0.2, help=\
+        "Specifies that we should sample from clusters for plotting at the percentage specified.")        
+    parser.add_argument("--clustering_method", default="k_means", help="Which algorithm to use for clustering embeddings.")
     args = parser.parse_args()
     print_args(args, parser)
-    if not args.no_sound:
-        import sounddevice as sd
         
     
     ## Print some environment information (for debugging purposes)
@@ -161,6 +242,56 @@ if __name__ == '__main__':
     ## Load the models one by one.
     print("Preparing the encoder, the synthesizer and the vocoder...")
     encoder.load_model(args.enc_model_fpath)
+
+    if (args.file_name_to_cluster_file_path is not None
+            and args.file_name_to_embedding_file_path is not None
+            and args.create_projection):
+        print("Using file_name_to_cluster_file_path: ||%s||" % args.file_name_to_cluster_file_path)
+        print("Using file_name_to_embedding_file_path: ||%s||" % args.file_name_to_embedding_file_path)
+        with open(args.file_name_to_embedding_file_path, "r") as file_name_to_embedding_file:
+            file_name_to_embedding_dict = json.loads(file_name_to_embedding_file.read())
+        with open(args.file_name_to_cluster_file_path, "r") as file_name_to_cluster_file:
+            file_name_to_cluster_dict = json.loads(file_name_to_cluster_file.read())
+        assert len(file_name_to_embedding_dict) == len(file_name_to_cluster_dict), "len(file_name_to_embedding_dict) = %d while len(file_name_to_cluster_dict) = %d" % (len(file_name_to_embedding_dict), len(file_name_to_cluster_dict))
+        assert file_name_to_embedding_dict.keys() == file_name_to_cluster_dict.keys(), "file_name_to_embedding_dict.keys() != file_name_to_cluster_dict.keys(), left out keys are: %s" % (set(file_name_to_embedding_dict.keys()).symmetric_difference(set(file_name_to_cluster_dict.keys())))
+        file_name_cluster_embedding_tuple_list = [(key, file_name_to_cluster_dict[key], file_name_to_embedding_dict[key]) for key in file_name_to_embedding_dict.keys()]
+
+        print("Drawing projections.....")
+        draw_umap_projections(
+            list(map(lambda x: x[2], file_name_cluster_embedding_tuple_list)), 
+            list(map(lambda x: x[1], file_name_cluster_embedding_tuple_list)),
+            sampling_percentage=args.sample_from_clusters)
+        print("Drew projections!")
+        sys.exit(0)
+
+    if args.file_name_to_embedding_file_path is not None:
+        print("Using file_name_to_embedding_file_path: ||%s||" % args.file_name_to_embedding_file_path)
+        with open(args.file_name_to_embedding_file_path, "r") as file_name_to_embedding_file:
+            file_name_to_embedding_dict = json.loads(file_name_to_embedding_file.read())
+            file_name_to_embedding_tuple_list = list(file_name_to_embedding_dict.items())
+
+        print("Running clustering.....")
+        loaded_embeddings = list(map(lambda x: x[1], file_name_to_embedding_tuple_list))
+        clustering_start = timer()
+        clusters = get_clustering_algorithm(args.clustering_method, loaded_embeddings).fit_predict(loaded_embeddings)
+        clustering_end = timer()
+        clusters_int = list(map(lambda x: int(x), clusters))
+        file_name_to_cluster = dict(list(zip(list(map(lambda x: x[0], file_name_to_embedding_tuple_list)), clusters_int)))
+        with open(args.output_clusters_file_path, "w") as file_name_to_cluster_file:
+            file_name_to_cluster_file.write(json.dumps(file_name_to_cluster))
+        print("Clustering took: %s" % str(timedelta(seconds=clustering_end - clustering_start)))
+        print("Produced %d clusters!" % len(set(clusters_int)))
+        print("Clusters have counts: ")
+        print(sorted(Counter(clusters_int).items(), key=lambda x: -x[1]))
+        print("Wrote clusters file.")
+        if args.create_projection:
+            print("Drawing projections.....")
+            draw_umap_projections(
+                loaded_embeddings,
+                clusters,
+                sampling_percentage=args.sample_from_clusters)
+            print("Drew projections!")
+        sys.exit(0)
     
     test_file_paths = [
         "/workspace-mount/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-1-leviathan-wakes/output_samples/audio/Leviathan Wakes (Unabridged) [File 01 of 57]--00001--normalized--20--00000.mp3",
@@ -169,15 +300,16 @@ if __name__ == '__main__':
         "/workspace-mount/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-1-leviathan-wakes/output_samples/audio/Leviathan Wakes (Unabridged) [File 01 of 57]--00055--normalized--20--00000.mp3",
     ]
     # test_files_dir = "/workspace-mount/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-1-leviathan-wakes/output_samples/audio/"
-    test_files_dir = "/workspace-mount/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-2-calibans-war/output_samples/audio/"
+    # test_files_dir = "/workspace-mount/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-2-calibans-war/output_samples/audio/"
+    test_files_dir = "/workspace-mount/Programs/audiobook-dataset-creator/src/expanse-data/all-expanse-audio"
     test_file_paths = sorted(map(lambda x: os.path.join(test_files_dir, x), os.listdir(test_files_dir)))
     test_file_names = list(sorted(map(lambda x: os.path.basename(x), test_file_paths)))
 
+    print("Iterating over files in dir: %s" % test_files_dir)
     print("Iterating over %d files" % len(test_file_paths))
-    kmeans = KMeans(n_clusters=4, random_state=9938)
     num_generated = 0
     for test_file_path in test_file_paths:
-        print("Running on path: ||%s||" % test_file_path)
+        # print("Running on path: ||%s||" % test_file_path)
         ## Computing the embedding
         # First, we load the wav using the function that the speaker encoder provides. This is 
         # important: there is preprocessing that must be applied.
@@ -189,7 +321,7 @@ if __name__ == '__main__':
             # - If the wav is already loaded:
             original_wav, sampling_rate = librosa.load(test_file_path)
             preprocessed_wav = encoder.preprocess_wav(original_wav, sampling_rate)
-            print("Loaded file succesfully")
+            # print("Loaded file succesfully")
         except:
             print("Error loading file: ||%s||" % test_file_path)
             continue
@@ -198,65 +330,46 @@ if __name__ == '__main__':
         # speaker encoder interfaces. These are mostly for in-depth research. You will typically
         # only use this function (with its default parameters):
         embed = encoder.embed_utterance(preprocessed_wav)
-        print("Created the embedding")
+        # print("Created the embedding")
         
-        
-        ## Generating the spectrogram
-        # text = input("Write a sentence (+-20 words) to be synthesized:\n")
-        text = "Even the captain's cabin was indicated only by a slightly larger bunk and the face of a locked safe."
-        
-        # The synthesizer works in batch, so you need to put your data in a list or numpy array
-        texts = [text]
         embeds = [embed]
-        # If you know what the attention layer alignments are, you can retrieve them here by
-        # passing return_alignments=True
-        # specs = synthesizer.synthesize_spectrograms(texts, embeds)
-        # spec = specs[0]
-        # print("Created the mel spectrogram")
-        
-        
-        ## Generating the waveform
-        # print("Synthesizing the waveform:")
-        # Synthesizing the waveform is fairly straightforward. Remember that the longer the
-        # spectrogram, the more time-efficient the vocoder.
-        # generated_wav = vocoder.infer_waveform(spec)
-        
-        
-        ## Post-generation
-        # There's a bug with sounddevice that makes the audio cut one second earlier, so we
-        # pad it.
-        # generated_wav = np.pad(generated_wav, (0, synthesizer.sample_rate), mode="constant")
-        
-        # Play the audio (non-blocking)
-        """
-        if not args.no_sound:
-            sd.stop()
-            sd.play(generated_wav, synthesizer.sample_rate)
-        """
             
         # Add the utterance
         name = "speaker_name_placeholder_gen_%05d" % np.random.randint(100000)
-        utterance = Utterance(name, "37", preprocessed_wav, None, embed, None, True)
-        utterances.append(utterance)
+        embeddings.append(embed)
         test_file_name = os.path.basename(test_file_path)
         file_name_to_embedding[test_file_name] = embed.tolist()
         
         # Plot it
-        if (len(utterances) > 500 and len(utterances) % 500 == 0) or num_generated == (len(test_file_paths) - 1):
-            with open("audio-file-embeddings--file-name-to-embedding.json", "w") as file_name_to_embedding_file:
+        if ((len(embeddings) > CLUSTER_AND_PLOT_ITERATIONS and len(embeddings) % CLUSTER_AND_PLOT_ITERATIONS == 0)
+                or num_generated == (len(test_file_paths) - 1)):
+            print("Writing embedding file.....")
+            with open(args.output_embeddings_file_path, "w") as file_name_to_embedding_file:
                 file_name_to_embedding_file.write(json.dumps(file_name_to_embedding))
 
-            print("Running K-Means on %d points....." % len(utterances))
-            clusters = kmeans.fit_predict(list(map(lambda x: x.embed, utterances)))
-            file_name_to_cluster = dict(list(zip(test_file_names[:len(clusters)], list(map(lambda x: int(x), clusters)))))
+            print("Running clustering on %d points....." % len(embeddings))
+            clustering_start = timer()
+            clusters = get_clustering_algorithm(args.clustering_method, embeddings).fit_predict(embeddings)
+            clusters_int = list(map(lambda x: int(x), clusters))
+            file_name_to_cluster = dict(list(zip(test_file_names[:len(clusters)], clusters_int)))
+            clustering_end = timer()
             print("Done clustering!")
+            print("Produced %d clusters!" % len(set(clusters_int)))
+            print("Clusters have counts: ")
+            print(sorted(Counter(clusters_int).items(), key=lambda x: -x[1]))
+            print("Clustering took: %s" % str(timedelta(seconds=clustering_end - clustering_start)))
 
-            with open("audio-file-embeddings--file-name-to-cluster.json", "w") as file_name_to_cluster_file:
+            print("Writing clusters file.....")
+            with open(args.output_clusters_file_path, "w") as file_name_to_cluster_file:
                 file_name_to_cluster_file.write(json.dumps(file_name_to_cluster))
 
-            print("Drawing projections.....")
-            draw_umap_projections(utterances, clusters)
-            print("Done drawing!")
+            if args.create_projection:
+                print("Drawing projections.....")
+                projection_start = timer()
+                draw_umap_projections(embeddings, clusters, sampling_percentage=args.sample_from_clusters)
+                projection_end = timer()
+                print("Done drawing!")
+                print("Projection took: %s" % str(timedelta(seconds=projection_end - projection_start)))
 
         # Save it on the disk
         """
