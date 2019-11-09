@@ -189,6 +189,34 @@ def get_clustering_algorithm(clustering_algorithm, x):
     print("Using clustering algorithm: %s" % clustering_algorithm)
     return clustering_algorithms[clustering_algorithm]
 
+def save_and_cluster(args, test_file_names, embeddings, file_name_to_embedding):
+    print("Writing embedding file.....")
+    with open(args.output_embeddings_file_path, "w") as file_name_to_embedding_file:
+        file_name_to_embedding_file.write(json.dumps(file_name_to_embedding))
+
+    print("Running clustering on %d points....." % len(embeddings))
+    clustering_start = timer()
+    clusters = get_clustering_algorithm(args.clustering_method, embeddings).fit_predict(embeddings)
+    clusters_int = list(map(lambda x: int(x), clusters))
+    file_name_to_cluster = dict(list(zip(test_file_names[:len(clusters)], clusters_int)))
+    clustering_end = timer()
+    print("Done clustering!")
+    print("Produced %d clusters!" % len(set(clusters_int)))
+    print("Clusters have counts: ")
+    print(sorted(Counter(clusters_int).items(), key=lambda x: -x[1]))
+    print("Clustering took: %s" % str(timedelta(seconds=clustering_end - clustering_start)))
+
+    print("Writing clusters file.....")
+    with open(args.output_clusters_file_path, "w") as file_name_to_cluster_file:
+        file_name_to_cluster_file.write(json.dumps(file_name_to_cluster))
+
+    if args.create_projection:
+        print("Drawing projections.....")
+        projection_start = timer()
+        draw_umap_projections(embeddings, clusters, sampling_percentage=args.sample_from_clusters)
+        projection_end = timer()
+        print("Done drawing!")
+        print("Projection took: %s" % str(timedelta(seconds=projection_end - projection_start)))
 
 if __name__ == '__main__':
     matplotlib.rcParams['interactive'] = True
@@ -340,44 +368,15 @@ if __name__ == '__main__':
         test_file_name = os.path.basename(test_file_path)
         file_name_to_embedding[test_file_name] = embed.tolist()
         
+        num_generated += 1
+
         # Plot it
         if ((len(embeddings) > CLUSTER_AND_PLOT_ITERATIONS and len(embeddings) % CLUSTER_AND_PLOT_ITERATIONS == 0)
-                or num_generated == (len(test_file_paths) - 1)):
-            print("Writing embedding file.....")
-            with open(args.output_embeddings_file_path, "w") as file_name_to_embedding_file:
-                file_name_to_embedding_file.write(json.dumps(file_name_to_embedding))
+                or num_generated == len(test_file_paths)):
+            save_and_cluster(args, test_file_names, embeddings, file_name_to_embedding)
 
-            print("Running clustering on %d points....." % len(embeddings))
-            clustering_start = timer()
-            clusters = get_clustering_algorithm(args.clustering_method, embeddings).fit_predict(embeddings)
-            clusters_int = list(map(lambda x: int(x), clusters))
-            file_name_to_cluster = dict(list(zip(test_file_names[:len(clusters)], clusters_int)))
-            clustering_end = timer()
-            print("Done clustering!")
-            print("Produced %d clusters!" % len(set(clusters_int)))
-            print("Clusters have counts: ")
-            print(sorted(Counter(clusters_int).items(), key=lambda x: -x[1]))
-            print("Clustering took: %s" % str(timedelta(seconds=clustering_end - clustering_start)))
-
-            print("Writing clusters file.....")
-            with open(args.output_clusters_file_path, "w") as file_name_to_cluster_file:
-                file_name_to_cluster_file.write(json.dumps(file_name_to_cluster))
-
-            if args.create_projection:
-                print("Drawing projections.....")
-                projection_start = timer()
-                draw_umap_projections(embeddings, clusters, sampling_percentage=args.sample_from_clusters)
-                projection_end = timer()
-                print("Done drawing!")
-                print("Projection took: %s" % str(timedelta(seconds=projection_end - projection_start)))
-
-        # Save it on the disk
-        """
-        fpath = "demo_output_%02d.wav" % num_generated
-        print(generated_wav.dtype)
-        librosa.output.write_wav(fpath, generated_wav.astype(np.float32), 
-                                 synthesizer.sample_rate)
-        """
-        num_generated += 1
-        # print("\nSaved output as %s\n\n" % fpath)
     
+        # print("\nSaved output as %s\n\n" % fpath)
+    print("Writing final embeddings and clusters.....")
+    save_and_cluster(args, test_file_names, embeddings, file_name_to_embedding)
+    print("Done!")
