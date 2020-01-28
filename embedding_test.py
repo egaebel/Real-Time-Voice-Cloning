@@ -178,15 +178,17 @@ def draw_umap_projections(embeddings, clusters, sampling_percentage=None):
         plt.savefig(umap_plot_path)
 
 
-def get_clustering_algorithm(clustering_algorithm, x):
+def get_clustering_algorithm(clustering_algorithm, x, num_clusters=4):
     clustering_algorithms = {
-        "k_means": KMeans(n_clusters=4, random_state=9938),
-        "spectral_clustering": SpectralClustering(n_clusters=4),
+        "k_means": KMeans(n_clusters=int(num_clusters), random_state=9938),
+        "spectral_clustering": SpectralClustering(n_clusters=int(num_clusters)),
         "mean_shift": MeanShift(bandwidth=estimate_bandwidth(x, quantile=0.2, n_samples=int(0.1 * len(x)))),
         "affinity_propagation": AffinityPropagation(damping=0.95, preference=50),
         "dbscan": DBSCAN(eps=0.5, metric="l1", min_samples=5),
     }
     print("Using clustering algorithm: %s" % clustering_algorithm)
+    if clustering_algorithm in ("k_means", "spectral_clustering"):
+        print("Using num_clusters: %s" % str(num_clusters))
     return clustering_algorithms[clustering_algorithm]
 
 def save_and_cluster(args, test_file_names, embeddings, file_name_to_embedding):
@@ -196,7 +198,7 @@ def save_and_cluster(args, test_file_names, embeddings, file_name_to_embedding):
 
     print("Running clustering on %d points....." % len(embeddings))
     clustering_start = timer()
-    clusters = get_clustering_algorithm(args.clustering_method, embeddings).fit_predict(embeddings)
+    clusters = get_clustering_algorithm(args.clustering_method, embeddings, args.num_clusters).fit_predict(embeddings)
     clusters_int = list(map(lambda x: int(x), clusters))
     file_name_to_cluster = dict(list(zip(test_file_names[:len(clusters)], clusters_int)))
     clustering_end = timer()
@@ -227,7 +229,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument("-e", "--enc_model_fpath", type=Path, 
+    parser.add_argument("-e",
+                        "--enc_model_fpath", 
+                        type=Path, 
                         default="encoder/saved_models/pretrained.pt",
                         help="Path to a saved encoder")
     parser.add_argument("--file_name_to_embedding_file_path", type=Path, default=None, help=\
@@ -243,6 +247,10 @@ if __name__ == '__main__':
     parser.add_argument("--sample_from_clusters", default=0.2, help=\
         "Specifies that we should sample from clusters for plotting at the percentage specified.")        
     parser.add_argument("--clustering_method", default="k_means", help="Which algorithm to use for clustering embeddings.")
+    parser.add_argument("--num_clusters", default=4, help="For algorithms that take cluster number, the number of clusters to produce.")
+    parser.add_argument("--input_files_directory",
+        default=None,
+        help="A directory full of audio files that should have embeddings created for them (I think they have to be mp3s.....).")
     args = parser.parse_args()
     print_args(args, parser)
         
@@ -271,6 +279,7 @@ if __name__ == '__main__':
     print("Preparing the encoder, the synthesizer and the vocoder...")
     encoder.load_model(args.enc_model_fpath)
 
+    # Embeddings and clusters have been generated already, only create the projection.
     if (args.file_name_to_cluster_file_path is not None
             and args.file_name_to_embedding_file_path is not None
             and args.create_projection):
@@ -292,6 +301,7 @@ if __name__ == '__main__':
         print("Drew projections!")
         sys.exit(0)
 
+    # The embedding has already been generated, only perform clustering.
     if args.file_name_to_embedding_file_path is not None:
         print("Using file_name_to_embedding_file_path: ||%s||" % args.file_name_to_embedding_file_path)
         with open(args.file_name_to_embedding_file_path, "r") as file_name_to_embedding_file:
@@ -301,7 +311,7 @@ if __name__ == '__main__':
         print("Running clustering.....")
         loaded_embeddings = list(map(lambda x: x[1], file_name_to_embedding_tuple_list))
         clustering_start = timer()
-        clusters = get_clustering_algorithm(args.clustering_method, loaded_embeddings).fit_predict(loaded_embeddings)
+        clusters = get_clustering_algorithm(args.clustering_method, loaded_embeddings, args.num_clusters).fit_predict(loaded_embeddings)
         clustering_end = timer()
         clusters_int = list(map(lambda x: int(x), clusters))
         file_name_to_cluster = dict(list(zip(list(map(lambda x: x[0], file_name_to_embedding_tuple_list)), clusters_int)))
@@ -321,15 +331,18 @@ if __name__ == '__main__':
             print("Drew projections!")
         sys.exit(0)
     
+    """
     test_file_paths = [
-        "/workspace-mount/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-1-leviathan-wakes/output_samples/audio/Leviathan Wakes (Unabridged) [File 01 of 57]--00001--normalized--20--00000.mp3",
-        "/workspace-mount/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-1-leviathan-wakes/output_samples/audio/Leviathan Wakes (Unabridged) [File 01 of 57]--00050--normalized--20--00000.mp3",
-        "/workspace-mount/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-1-leviathan-wakes/output_samples/audio/Leviathan Wakes (Unabridged) [File 01 of 57]--00051--normalized--20--00000.mp3",
-        "/workspace-mount/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-1-leviathan-wakes/output_samples/audio/Leviathan Wakes (Unabridged) [File 01 of 57]--00055--normalized--20--00000.mp3",
+        "/home/egaebel/workspace/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-1-leviathan-wakes/output_samples/audio/Leviathan Wakes (Unabridged) [File 01 of 57]--00001--normalized--20--00000.mp3",
+        "/home/egaebel/workspace/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-1-leviathan-wakes/output_samples/audio/Leviathan Wakes (Unabridged) [File 01 of 57]--00050--normalized--20--00000.mp3",
+        "/home/egaebel/workspace/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-1-leviathan-wakes/output_samples/audio/Leviathan Wakes (Unabridged) [File 01 of 57]--00051--normalized--20--00000.mp3",
+        "/home/egaebel/workspace/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-1-leviathan-wakes/output_samples/audio/Leviathan Wakes (Unabridged) [File 01 of 57]--00055--normalized--20--00000.mp3",
     ]
-    # test_files_dir = "/workspace-mount/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-1-leviathan-wakes/output_samples/audio/"
-    # test_files_dir = "/workspace-mount/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-2-calibans-war/output_samples/audio/"
-    test_files_dir = "/workspace-mount/Programs/audiobook-dataset-creator/src/expanse-data/all-expanse-audio"
+    """
+    # test_files_dir = "/workspace/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-1-leviathan-wakes/output_samples/audio/"
+    # test_files_dir = "/workspace/Programs/audiobook-dataset-creator/src/expanse-data/the-expanse-2-calibans-war/output_samples/audio/"
+    # test_files_dir = "/home/egaebel/workspace/Programs/audiobook-dataset-creator/src/expanse-data/all-expanse-audio"
+    test_files_dir = args.input_files_directory
     test_file_paths = sorted(map(lambda x: os.path.join(test_files_dir, x), os.listdir(test_files_dir)))
     test_file_names = list(sorted(map(lambda x: os.path.basename(x), test_file_paths)))
 
