@@ -25,8 +25,10 @@ import random
 import sys
 import torch
 import umap
+import warnings
 
-CLUSTER_AND_PLOT_ITERATIONS = 2000
+CLUSTER_AND_PLOT_ITERATIONS = 5000
+PROGRESS_ITERATIONS = 5000
 
 colormap = np.array([
     [255,0,0], 
@@ -194,10 +196,13 @@ def get_clustering_algorithm(clustering_algorithm, x, num_clusters=4):
 def save_and_cluster(args, test_file_names, embeddings, file_name_to_embedding):
     print("Writing embedding file.....")
     sys.stdout.flush()
+    embedding_file_write_start = timer()
     with open(args.output_embeddings_file_path, "w") as file_name_to_embedding_file:
         file_name_to_embedding_file.write(json.dumps(file_name_to_embedding))
+    embedding_file_write_end = timer()
     print("Finished writing embedding file!")
     sys.stdout.flush()
+    print("Writing embedding file took: %s" % str(timedelta(seconds=embedding_file_write_end - embedding_file_write_start)))
 
     print("Running clustering on %d points....." % len(embeddings))
     sys.stdout.flush()
@@ -231,6 +236,10 @@ def save_and_cluster(args, test_file_names, embeddings, file_name_to_embedding):
         sys.stdout.flush()
 
 if __name__ == '__main__':
+    # Suppress warnings from librosa about audioread, specifically: "UserWarning: PySoundFile failed. Trying audioread instead."
+    warnings.filterwarnings("ignore", message="PySoundFile failed. Trying audioread instead.", category=UserWarning)
+
+    # Set Matplotlib backend
     matplotlib.rcParams['interactive'] = True
     matplotlib.interactive(True)
     print("Matplotlib backend: %s" % str(plt.get_backend()))
@@ -261,6 +270,13 @@ if __name__ == '__main__':
     parser.add_argument("--input_files_directory",
         default=None,
         help="A directory full of audio files that should have embeddings created for them (I think they have to be mp3s.....).")
+    parser.add_argument(
+        "--chunk_size",
+        default=CLUSTER_AND_PLOT_ITERATIONS,
+        help=("The size of the intermediary chunk to compute the embedding and cluster size over as sanity checks. "
+            "Note: the FULL dataset will be embedded and clustered at once at the very end. "
+            "This only controls the number of times (indirectly via chunk size) "
+            "that the embedding and clustering will be done before reaching the end of the dataset."))
     args = parser.parse_args()
     print_args(args, parser)
         
@@ -358,6 +374,7 @@ if __name__ == '__main__':
 
     print("Iterating over files in dir: %s" % test_files_dir)
     print("Iterating over %d files" % len(test_file_paths))
+    sys.stdout.flush()
     num_generated = 0
     for test_file_path in test_file_paths:
         # print("Running on path: ||%s||" % test_file_path)
@@ -393,13 +410,18 @@ if __name__ == '__main__':
         
         num_generated += 1
 
+        if len(embeddings) % PROGRESS_ITERATIONS == 0:
+            print("Embedding count: %d" % len(embeddings))
+
         # Plot it
-        if ((len(embeddings) > CLUSTER_AND_PLOT_ITERATIONS and len(embeddings) % CLUSTER_AND_PLOT_ITERATIONS == 0)
+        if ((len(embeddings) > int(args.chunk_size) and len(embeddings) % int(args.chunk_size) == 0)
                 or num_generated == len(test_file_paths)):
+            print("Saving and clustering on embedding number: %d" % len(embeddings))
             save_and_cluster(args, test_file_names, embeddings, file_name_to_embedding)
 
     
         # print("\nSaved output as %s\n\n" % fpath)
     print("Writing final embeddings and clusters.....")
+    sys.stdout.flush()
     save_and_cluster(args, test_file_names, embeddings, file_name_to_embedding)
     print("Done!")
