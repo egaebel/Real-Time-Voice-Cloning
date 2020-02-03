@@ -193,10 +193,14 @@ def get_clustering_algorithm(clustering_algorithm, x, num_clusters=4):
 
 def save_and_cluster(args, test_file_names, embeddings, file_name_to_embedding):
     print("Writing embedding file.....")
+    sys.stdout.flush()
     with open(args.output_embeddings_file_path, "w") as file_name_to_embedding_file:
         file_name_to_embedding_file.write(json.dumps(file_name_to_embedding))
+    print("Finished writing embedding file!")
+    sys.stdout.flush()
 
     print("Running clustering on %d points....." % len(embeddings))
+    sys.stdout.flush()
     clustering_start = timer()
     clusters = get_clustering_algorithm(args.clustering_method, embeddings, args.num_clusters).fit_predict(embeddings)
     clusters_int = list(map(lambda x: int(x), clusters))
@@ -207,18 +211,24 @@ def save_and_cluster(args, test_file_names, embeddings, file_name_to_embedding):
     print("Clusters have counts: ")
     print(sorted(Counter(clusters_int).items(), key=lambda x: -x[1]))
     print("Clustering took: %s" % str(timedelta(seconds=clustering_end - clustering_start)))
+    sys.stdout.flush()
 
     print("Writing clusters file.....")
+    sys.stdout.flush()
     with open(args.output_clusters_file_path, "w") as file_name_to_cluster_file:
         file_name_to_cluster_file.write(json.dumps(file_name_to_cluster))
+    print("Finished writing clusters file!")
+    sys.stdout.flush()
 
     if args.create_projection:
         print("Drawing projections.....")
+        sys.stdout.flush()
         projection_start = timer()
         draw_umap_projections(embeddings, clusters, sampling_percentage=args.sample_from_clusters)
         projection_end = timer()
-        print("Done drawing!")
+        print("Done drawing projections!")
         print("Projection took: %s" % str(timedelta(seconds=projection_end - projection_start)))
+        sys.stdout.flush()
 
 if __name__ == '__main__':
     matplotlib.rcParams['interactive'] = True
