@@ -277,6 +277,10 @@ if __name__ == '__main__':
             "Note: the FULL dataset will be embedded and clustered at once at the very end. "
             "This only controls the number of times (indirectly via chunk size) "
             "that the embedding and clustering will be done before reaching the end of the dataset."))
+     parser.add_argument(
+        "--progress_chunk_size",
+        default=PROGRESS_ITERATIONS,
+        help="The number of iterations to print out progress on. I.e. print out the progress every <progress_chunk_size> iterations")
     args = parser.parse_args()
     print_args(args, parser)
         
@@ -410,7 +414,7 @@ if __name__ == '__main__':
         
         num_generated += 1
 
-        if len(embeddings) % PROGRESS_ITERATIONS == 0:
+        if len(embeddings) % int(args.progress_chunk_size) == 0:
             print("Embedding count: %d" % len(embeddings))
 
         # Plot it
